@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"go/build"
+	"io/ioutil"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -134,7 +135,7 @@ func (p *Project) Diff(since string) (Diff, error) {
 	if err != nil {
 		return Diff{}, err
 	}
-	return p.processDiff(raw), nil
+	return p.processDiff(raw)
 }
 
 // RecursiveDiff identifies the files and packages directly modified since the
@@ -175,7 +176,7 @@ func (p *Project) All() (Diff, error) {
 	if err != nil {
 		return Diff{}, err
 	}
-	return p.processDiff(raw), nil
+	return p.processDiff(raw)
 }
 
 // Exec executes a command, sending the output directly to standard out and
@@ -187,7 +188,7 @@ func (p *Project) Exec(cmd string, args ...string) error {
 	return c.Run()
 }
 
-func (p *Project) processDiff(raw git.Diff) Diff {
+func (p *Project) processDiff(raw git.Diff) (Diff, error) {
 	d := Diff{
 		Files:    make([]PathDiff, 0, len(raw.Modified)),
 		Packages: make([]PathDiff, 0, len(raw.Deleted)),
@@ -219,11 +220,17 @@ func (p *Project) processDiff(raw git.Diff) Diff {
 			dir = filepath.Dir(dir)
 		}
 
-		pkg, err := build.Import(fmt.Sprintf("./%s", dir), p.repo.Root(), build.ImportComment)
-		if err != nil {
-			// Not all directories are Go packages.
-			p.logger.Debugf("Go tool can't import directory %q: %v", dir, err)
-			continue
+		pkg, importErr := build.Import(fmt.Sprintf("./%s", dir), p.repo.Root(), build.ImportComment)
+		if importErr != nil {
+			contains, err := containsGo(filepath.Join(p.repo.Root(), dir))
+			if err != nil {
+				return d, fmt.Errorf("couldn't check if directory %q contains Go source: %v", dir, err)
+			}
+			if !contains {
+				// Not all directories are packages.
+				continue
+			}
+			return d, fmt.Errorf("Go tool can't import directory %q: %v", dir, importErr)
 		}
 
 		if dir == "." {
@@ -235,15 +242,25 @@ func (p *Project) processDiff(raw git.Diff) Diff {
 	sort.Slice(d.Packages, func(i, j int) bool {
 		return d.Packages[i].less(d.Packages[j])
 	})
-	return d
+	return d, nil
 }
 
 func (p *Project) setRoot() error {
-	pkg, err := build.ImportDir(p.repo.Root(), build.ImportComment)
-	if err == nil && pkg.ImportPath != "" {
+	pkg, importErr := build.ImportDir(p.repo.Root(), build.ImportComment)
+	if importErr == nil && pkg.ImportPath != "" {
 		p.root = pkg.ImportPath
 		p.logger.Debugf("found root package %q", p.root)
 		return nil
+	}
+
+	// We couldn't import the root of the repository. This is fine as long as
+	// there's no Go code there.
+	contains, err := containsGo(p.repo.Root())
+	if err != nil {
+		return err
+	}
+	if contains {
+		return importErr
 	}
 
 	p.logger.Debugf("no Go source files in repository root, guessing root package from path")
@@ -285,4 +302,17 @@ func (p *Project) graph() (map[string][]string, error) {
 func exists(path string) bool {
 	_, err := os.Stat(path)
 	return err == nil
+}
+
+func containsGo(path string) (bool, error) {
+	files, err := ioutil.ReadDir(path)
+	if err != nil {
+		return false, err
+	}
+	for _, f := range files {
+		if strings.HasSuffix(f.Name(), ".go") {
+			return true, nil
+		}
+	}
+	return false, nil
 }
