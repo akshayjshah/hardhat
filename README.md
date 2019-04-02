@@ -12,8 +12,7 @@ go get -u github.com/akshayjshah/hardhat
 
 ## Current Status
 
-This is currently a skunkworks project &mdash; caveat emptor. If it ever
-stabilizes, I'll start cutting semver-compliant releases.
+This was currently a skunkworks project &mdash; caveat emptor. After experimenting with this approach, I've concluded that using Bazel is a better option.
 
 Right now, it supports two useful commands: `status` and `test`. See the
 output of `hardhat --help`, `hardhat status --help`, and `hardhat test --help`
